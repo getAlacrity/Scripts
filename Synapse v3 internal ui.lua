@@ -2,7 +2,7 @@ local ReGui = loadstring(game:HttpGet("https://raw.githubusercontent.com/depthso
 
 ReGui:DefineTheme("Synapse X Theme", {
 	Text = Color3.fromRGB(255,255,255),
-	ButtonsBg = Color3.fromRGB(150, 80,40),
+	ButtonsBg = Color3.fromRGB(50,50,50),
 	WindowBg = Color3.fromRGB(35, 35, 35),
 	TitleBarBg = Color3.fromRGB(60,60,60),
 	TitleBarBgActive = Color3.fromRGB(60,60,60),
@@ -131,5 +131,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
     if input.KeyCode == Enum.KeyCode.Insert then
         local isVisible = Window.Visible
         Window:SetVisible(not isVisible)
-    end  
+    end
+    if input.KeyCode == Enum.KeyCode.Q then
+        Window:Close()
+    end
 end)
