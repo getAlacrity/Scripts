@@ -134,7 +134,4 @@ UserInputService.InputBegan:Connect(function(input, processed)
         local isVisible = Window.Visible
         Window:SetVisible(not isVisible)
     end
-    if input.KeyCode == Enum.KeyCode.Q then
-        Window:Close()
-    end
 end)
