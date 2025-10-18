@@ -32,8 +32,7 @@ local ScriptTab = Window:CreateTab({ Name = "Synapse X" })
 
 local Editor = ScriptTab:CodeEditor({
     Editable = true,
-    FontSize = 16,
-    FontFace = Font.new("rbxasset://fonts/families/JetBrainsMono.json"),
+    FontSize = 14,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
     TextWrapped = false,
