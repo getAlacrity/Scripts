@@ -90,12 +90,10 @@ local Console = ConsoleTab:Console({
     Position = UDim2.fromOffset(0, 0)
 })
 
--- 改寫 print / warn / error 讓輸出顯示在 Console Tab
 local oldPrint = print
 local oldWarn = warn
 local oldError = error
 
--- 共用輸出函式
 local function appendToConsole(prefix, msg, color)
     local line = prefix .. msg .. ""
     Console:AppendText(line)
