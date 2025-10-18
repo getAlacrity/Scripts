@@ -14,7 +14,6 @@ ReGui:DefineTheme("Synapse X Theme", {
 local Window = ReGui:TabsWindow({
     Title = "",
     Theme = "Synapse X Theme",
-    NoClose = true,
     Size = UDim2.fromOffset(700, 500)
 })
 
@@ -132,5 +131,5 @@ UserInputService.InputBegan:Connect(function(input, processed)
     if input.KeyCode == Enum.KeyCode.Insert then
         local isVisible = Window.Visible
         Window:SetVisible(not isVisible)
-    end
+    end  
 end)
