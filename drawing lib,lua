@@ -1,0 +1,666 @@
+-- Improved Synapse X Drawing API Implementation
+
+-- Build the UI
+local drawingUI = Instance.new("ScreenGui")
+drawingUI.Name = tostring(math.random(1, 999999) + math.huge)
+drawingUI.DisplayOrder = 2147483647
+drawingUI.IgnoreGuiInset = true
+drawingUI.ResetOnSpawn = false
+drawingUI.ZIndexBehavior = Enum.ZIndexBehavior.Global
+drawingUI.Parent = gethui()
+
+-- Drawing configuration
+local drawingIndex = 1
+local drawings = {}
+local drawingimages = {}
+
+-- Base drawing object template
+local baseDrawingObj = {
+    Visible = true,
+    ZIndex = 0,
+    Transparency = 1,
+    Color = Color3.new(),
+    Remove = function(self)
+        setmetatable(self, nil)
+    end
+}
+
+-- Font handling
+local drawingFontsEnum = {
+    [0] = Font.fromEnum(Enum.Font.Roboto),
+    [1] = Font.fromEnum(Enum.Font.Legacy),
+    [2] = Font.fromEnum(Enum.Font.SourceSans),
+    [3] = Font.fromEnum(Enum.Font.RobotoMono),
+    [4] = Font.fromEnum(Enum.Font.Gotham),
+    [5] = Font.fromEnum(Enum.Font.Code), -- or Monospace equivalent
+    [6] = Font.fromEnum(Enum.Font.Nunito),
+    [7] = Font.fromEnum(Enum.Font.Ubuntu),
+}
+
+local function getFontFromIndex(fontIndex)
+    return drawingFontsEnum[fontIndex] or Font.fromEnum(Enum.Font.SourceSans)
+end
+
+local function convertTransparency(transparency)
+    return math.clamp(1 - transparency, 0, 1)
+end
+
+-- Utility functions
+-- [FIXED] Correctly iterates using the object ID (k) to find and destroy children.
+local cleardrawcache = newcclosure(function()
+    for k, v in pairs(drawings) do -- k is objId, v is proxy
+        local childName = "Drawing_" .. tostring(k)
+        local child = drawingUI:FindFirstChild(childName)
+        if child then
+            child:Destroy()
+        end
+    end
+    
+    -- No need to iterate drawingimages separately, as 'drawings' contains all objects.
+    -- We still clear both tables as per the original script.
+    table.clear(drawings)
+    table.clear(drawingimages)
+end)
+
+-- [FIXED] Correctly checks if 'thing' is a valid proxy table by iterating 'drawings'.
+local isrenderobj = newcclosure(function(thing)
+    if type(thing) ~= "table" then
+        return false
+    end
+    
+    -- Iterate through the values (proxies) of the drawings table
+    for _, proxy in pairs(drawings) do
+        if proxy == thing then
+            return true
+        end
+    end
+    
+    return false
+end)
+
+-- [FIXED] Wrapped in pcall for safety, in case 'obj' is nil or not a table.
+local getrenderproperty = newcclosure(function(obj, prop)
+    local success, value = pcall(function()
+        return obj[prop]
+    end)
+    if not success then
+        warn("getrenderproperty failed:", value) -- 'value' contains the error message
+        return nil
+    end
+    return value
+end)
+
+-- [FIXED] Wrapped in pcall for safety and returns success status.
+local setrenderproperty = newcclosure(function(obj, prop, val)
+    local success, err = pcall(function()
+        obj[prop] = val
+    end)
+    if not success then
+        warn("setrenderproperty failed:", err)
+    end
+    return success
+end)
+
+-- Drawing library setup
+local Drawing = {
+    Fonts = {
+        UI = 0,
+        System = 1,
+        Plex = 2,
+        Monospace = 3
+    }
+}
+
+-- Drawing object creation
+Drawing.new = newcclosure(function(drawingType)
+    drawingIndex = drawingIndex + 1
+    local objId = drawingIndex
+    
+    if drawingType == "Line" then
+        local lineObj = {
+            From = Vector2.zero,
+            To = Vector2.zero,
+            Thickness = 3
+        }
+        
+        setmetatable(lineObj, {__index = baseDrawingObj})
+        
+        local lineFrame = Instance.new("Frame")
+        lineFrame.Name = "Drawing_" .. tostring(objId)
+        lineFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+        lineFrame.BorderSizePixel = 0
+        lineFrame.BackgroundColor3 = lineObj.Color
+        lineFrame.Visible = lineObj.Visible
+        lineFrame.ZIndex = lineObj.ZIndex
+        lineFrame.BackgroundTransparency = convertTransparency(lineObj.Transparency)
+        lineFrame.Parent = drawingUI
+        
+        local function updateLine()
+            local direction = (lineObj.To - lineObj.From)
+            local center = (lineObj.To + lineObj.From) / 2
+            local distance = direction.Magnitude
+            local theta = math.deg(math.atan2(direction.Y, direction.X))
+            
+            lineFrame.Position = UDim2.fromOffset(center.X, center.Y)
+            lineFrame.Rotation = theta
+            lineFrame.Size = UDim2.fromOffset(distance, lineObj.Thickness)
+        end
+        
+        local proxy = {}
+        drawings[objId] = proxy
+        
+        return setmetatable(proxy, {
+            __newindex = function(_, index, value)
+                -- Check if property exists in the object or base object
+                if lineObj[index] == nil then return end
+                
+                lineObj[index] = value
+                
+                if index == "From" or index == "To" or index == "Thickness" then
+                    updateLine()
+                elseif index == "Visible" then
+                    lineFrame.Visible = value
+                elseif index == "ZIndex" then
+                    lineFrame.ZIndex = value
+                elseif index == "Transparency" then
+                    lineFrame.BackgroundTransparency = convertTransparency(value)
+                elseif index == "Color" then
+                    lineFrame.BackgroundColor3 = value
+                end
+            end,
+            __index = function(self, index)
+                if index == "Remove" or index == "Destroy" then
+                    return function()
+                        lineFrame:Destroy()
+                        drawings[objId] = nil
+                    end
+                end
+                return lineObj[index]
+            end
+        })
+        
+    elseif drawingType == "Text" then
+        local textObj = {
+            Text = "",
+            Font = getFontFromIndex(0) --[[Drawing.Fonts.Plex]],
+            Size = 24,
+            Position = Vector2.zero,
+            _Center = false,
+            Outline = false,
+            OutlineColor = Color3.new()
+        }
+        
+        setmetatable(textObj, {__index = baseDrawingObj})
+        
+        local textLabel = Instance.new("TextLabel")
+        textLabel.Name = "Drawing_" .. tostring(objId)
+        textLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+        textLabel.BorderSizePixel = 0
+        textLabel.BackgroundTransparency = 1
+        textLabel.Visible = textObj.Visible
+        textLabel.TextColor3 = textObj.Color
+        textLabel.TextTransparency = convertTransparency(textObj.Transparency)
+        textLabel.ZIndex = textObj.ZIndex
+        textLabel.FontFace = getFontFromIndex(0)
+        textLabel.TextSize = textObj.Size
+        textLabel.Parent = drawingUI
+        
+        local uiStroke = Instance.new("UIStroke")
+        uiStroke.Thickness = 1
+        uiStroke.Enabled = textObj.Outline
+        uiStroke.Color = textObj.OutlineColor
+        uiStroke.Parent = textLabel
+        
+        local function updateTextPosition()
+            local textBounds = textLabel.TextBounds
+            local offset = textBounds / 2
+            textLabel.Size = UDim2.fromOffset(textBounds.X, textBounds.Y)
+            textLabel.Position = UDim2.fromOffset(
+                textObj.Position.X + (not textObj.Center and offset.X or 0),
+                textObj.Position.Y + offset.Y
+            )
+        end
+        
+        textLabel:GetPropertyChangedSignal("TextBounds"):Connect(updateTextPosition)
+        
+        local proxy = {}
+        drawings[objId] = proxy
+        
+        return setmetatable(proxy, {
+            __newindex = function(_, index, value)
+                if textObj[index] == nil then return end
+                
+                textObj[index] = value
+                
+                if index == "Text" then
+                    textLabel.Text = value
+                elseif index == "Font" then
+                    textLabel.FontFace = getFontFromIndex(math.clamp(value, 0, 7)) -- Changed 3 to 7
+                elseif index == "Size" then
+                    textLabel.TextSize = value
+                elseif index == "Position" or index == "Center" then
+                    updateTextPosition()
+                elseif index == "Outline" then
+                    uiStroke.Enabled = value
+                elseif index == "OutlineColor" then
+                    uiStroke.Color = value
+                elseif index == "Visible" then
+                    textLabel.Visible = value
+                elseif index == "ZIndex" then
+                    textLabel.ZIndex = value
+                elseif index == "Transparency" then
+                    local transparency = convertTransparency(value)
+                    textLabel.TextTransparency = transparency
+                    uiStroke.Transparency = transparency
+                elseif index == "Color" then
+                    textLabel.TextColor3 = value
+                end
+            end,
+            __index = function(self, index)
+                if index == "Remove" or index == "Destroy" then
+                    return function()
+                        textLabel:Destroy()
+                        drawings[objId] = nil
+                    end
+                elseif index == "TextBounds" then
+                    return textLabel.TextBounds
+                end
+                return textObj[index]
+            end
+        })
+        
+    elseif drawingType == "Circle" then
+        local circleObj = {
+            Radius = 150,
+            Position = Vector2.zero,
+            Thickness = 1,
+            Filled = false
+        }
+        
+        setmetatable(circleObj, {__index = baseDrawingObj})
+        
+        local circleFrame = Instance.new("Frame")
+        circleFrame.Name = "Drawing_" .. tostring(objId)
+        circleFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+        circleFrame.BorderSizePixel = 0
+        circleFrame.BackgroundColor3 = circleObj.Color
+        circleFrame.Visible = circleObj.Visible
+        circleFrame.ZIndex = circleObj.ZIndex
+        circleFrame.BackgroundTransparency = circleObj.Filled and convertTransparency(circleObj.Transparency) or 1
+        circleFrame.Parent = drawingUI
+        
+        local uiCorner = Instance.new("UICorner")
+        uiCorner.CornerRadius = UDim.new(0.5, 0) -- Changed to 0.5 scale for a perfect circle
+        uiCorner.Parent = circleFrame
+        
+        local uiStroke = Instance.new("UIStroke")
+        uiStroke.Thickness = circleObj.Thickness
+        uiStroke.Enabled = not circleObj.Filled
+        uiStroke.Color = circleObj.Color
+        uiStroke.Transparency = convertTransparency(circleObj.Transparency)
+        uiStroke.Parent = circleFrame
+        
+        local function updateCircle()
+            local diameter = circleObj.Radius * 2
+            circleFrame.Size = UDim2.fromOffset(diameter, diameter)
+            circleFrame.Position = UDim2.fromOffset(circleObj.Position.X, circleObj.Position.Y)
+        end
+        
+        updateCircle() -- Initial update
+        
+        local proxy = {}
+        drawings[objId] = proxy
+        drawingimages[objId] = proxy
+        
+        return setmetatable(proxy, {
+            __newindex = function(_, index, value)
+                if circleObj[index] == nil then return end
+                
+                circleObj[index] = value
+                
+                if index == "Radius" or index == "Position" then
+                    updateCircle()
+                elseif index == "Thickness" then
+                    uiStroke.Thickness = math.max(0.6, value)
+                elseif index == "Filled" then
+                    circleFrame.BackgroundTransparency = value and convertTransparency(circleObj.Transparency) or 1
+                    uiStroke.Enabled = not value
+                elseif index == "Visible" then
+                    circleFrame.Visible = value
+                elseif index == "ZIndex" then
+                    circleFrame.ZIndex = value
+                elseif index == "Transparency" then
+                    local transparency = convertTransparency(value)
+                    circleFrame.BackgroundTransparency = circleObj.Filled and transparency or 1
+                    uiStroke.Transparency = transparency
+                elseif index == "Color" then
+                    circleFrame.BackgroundColor3 = value
+                    uiStroke.Color = value
+                end
+            end,
+            __index = function(self, index)
+                if index == "Remove" or index == "Destroy" then
+                    return function()
+                        circleFrame:Destroy()
+                        drawings[objId] = nil
+                        drawingimages[objId] = nil
+                    end
+                end
+                return circleObj[index]
+            end
+        })
+        
+    elseif drawingType == "Square" then
+        local squareObj = {
+            Size = Vector2.new(100, 100),
+            Position = Vector2.zero,
+            Thickness = 1,
+            Filled = false
+        }
+        
+        setmetatable(squareObj, {__index = baseDrawingObj})
+        
+        local squareFrame = Instance.new("Frame")
+        squareFrame.Name = "Drawing_" .. tostring(objId)
+        squareFrame.BorderSizePixel = 0
+        squareFrame.BackgroundColor3 = squareObj.Color
+        squareFrame.Visible = squareObj.Visible
+        squareFrame.ZIndex = squareObj.ZIndex
+        squareFrame.BackgroundTransparency = squareObj.Filled and convertTransparency(squareObj.Transparency) or 1
+        squareFrame.Parent = drawingUI
+        
+        local uiStroke = Instance.new("UIStroke")
+        uiStroke.Thickness = squareObj.Thickness
+        uiStroke.Enabled = not squareObj.Filled
+        uiStroke.Color = squareObj.Color
+        uiStroke.Transparency = convertTransparency(squareObj.Transparency)
+        uiStroke.Parent = squareFrame
+
+        local uiCorner = Instance.new("UICorner")
+        uiCorner.CornerRadius = UDim.new(0, 0) -- Changed 0.5 to 0 for a square
+        uiCorner.Parent = squareFrame
+
+        local function updateSquare()
+            squareFrame.Size = UDim2.fromOffset(squareObj.Size.X, squareObj.Size.Y)
+            squareFrame.Position = UDim2.fromOffset(squareObj.Position.X, squareObj.Position.Y)
+        end
+        
+        updateSquare() -- Initial update
+        
+        local proxy = {}
+        drawings[objId] = proxy
+        
+        return setmetatable(proxy, {
+            __newindex = function(_, index, value)
+                if squareObj[index] == nil then return end
+                
+                squareObj[index] = value
+                
+                if index == "Size" or index == "Position" then
+                    updateSquare()
+                elseif index == "Thickness" then
+                    uiStroke.Thickness = math.max(0.6, value)
+                elseif index == "Filled" then
+                    squareFrame.BackgroundTransparency = value and convertTransparency(squareObj.Transparency) or 1
+                    uiStroke.Enabled = not value
+                elseif index == "Visible" then
+                    squareFrame.Visible = value
+                elseif index == "ZIndex" then
+                    squareFrame.ZIndex = value
+                elseif index == "Transparency" then
+                    local transparency = convertTransparency(value)
+                    squareFrame.BackgroundTransparency = squareObj.Filled and transparency or 1
+                    uiStroke.Transparency = transparency
+                elseif index == "Color" then
+                    squareFrame.BackgroundColor3 = value
+                    uiStroke.Color = value
+                end
+            end,
+            __index = function(self, index)
+                if index == "Remove" or index == "Destroy" then
+                    return function()
+                        squareFrame:Destroy()
+                        drawings[objId] = nil
+                    end
+                end
+                return squareObj[index]
+            end
+        })
+        
+    elseif drawingType == "Image" then
+        local imageObj = {
+            Data = "",
+            DataURL = "rbxassetid://0",
+            Size = Vector2.new(100, 100),
+            Position = Vector2.zero,
+            Rounding = 0
+        }
+        
+        setmetatable(imageObj, {__index = baseDrawingObj})
+        
+        local imageFrame = Instance.new("ImageLabel")
+        imageFrame.Name = "Drawing_" .. tostring(objId)
+        imageFrame.BorderSizePixel = 0
+        imageFrame.BackgroundTransparency = 1
+        imageFrame.Visible = imageObj.Visible
+        imageFrame.ZIndex = imageObj.ZIndex
+        imageFrame.ImageTransparency = convertTransparency(imageObj.Transparency)
+        imageFrame.ImageColor3 = imageObj.Color
+        imageFrame.ScaleType = Enum.ScaleType.Stretch
+        imageFrame.Parent = drawingUI
+        
+        local uiCorner = Instance.new("UICorner")
+        uiCorner.CornerRadius = UDim.new(0, imageObj.Rounding)
+        uiCorner.Parent = imageFrame
+        
+        local function updateImage()
+            imageFrame.Size = UDim2.fromOffset(imageObj.Size.X, imageObj.Size.Y)
+            imageFrame.Position = UDim2.fromOffset(imageObj.Position.X, imageObj.Position.Y)
+            uiCorner.CornerRadius = UDim.new(0, imageObj.Rounding)
+        end
+        
+        updateImage() -- Initial update
+        
+        local proxy = {}
+        drawings[objId] = proxy
+        drawingimages[objId] = proxy
+        
+        return setmetatable(proxy, {
+            __newindex = function(_, index, value)
+                if imageObj[index] == nil then return end
+                
+                imageObj[index] = value
+                
+                if index == "Data" then
+                    -- Handle image data (would need proper implementation)
+                    -- For Synapse X compatibility, this might involve 'Drawing.load'
+                    -- which isn't implemented here.
+                    warn("Setting 'Data' property is not fully implemented.")
+                elseif index == "DataURL" then
+                    imageFrame.Image = value
+                elseif index == "Size" or index == "Position" or index == "Rounding" then
+                    updateImage()
+                elseif index == "Visible" then
+                    imageFrame.Visible = value
+                elseif index == "ZIndex" then
+                    imageFrame.ZIndex = value
+                elseif index == "Transparency" then
+                    imageFrame.ImageTransparency = convertTransparency(value)
+                elseif index == "Color" then
+                    imageFrame.ImageColor3 = value
+                end
+            end,
+            __index = function(self, index)
+                if index == "Remove" or index == "Destroy" then
+                    return function()
+                        imageFrame:Destroy()
+                        drawings[objId] = nil
+                        drawingimages[objId] = nil
+                    end
+                elseif index == "Data" then
+                    -- 'Data' property (raw bytes) isn't stored, return nil
+                    return nil
+                end
+                return imageObj[index]
+            end
+        })
+        
+    elseif drawingType == "Quad" then
+        local quadObj = {
+            PointA = Vector2.zero,
+            PointB = Vector2.zero,
+            PointC = Vector2.zero,
+            PointD = Vector2.zero,
+            Thickness = 1,
+            Filled = false
+        }
+        
+        setmetatable(quadObj, {__index = baseDrawingObj})
+        
+        -- Create four line objects for the quad's outline
+        local lines = {
+            A = Drawing.new("Line"),
+            B = Drawing.new("Line"),
+            C = Drawing.new("Line"),
+            D = Drawing.new("Line")
+        }
+        
+        -- Function to update the lines based on the quad's points
+        local function updateQuad()
+            -- Only update if not a filled quad, since filled is not yet implemented
+            if not quadObj.Filled then
+                lines.A.From = quadObj.PointA
+                lines.A.To = quadObj.PointB
+                lines.B.From = quadObj.PointB
+                lines.B.To = quadObj.PointC
+                lines.C.From = quadObj.PointC
+                lines.C.To = quadObj.PointD
+                lines.D.From = quadObj.PointD
+                lines.D.To = quadObj.PointA
+            end
+        end
+
+        -- This function is called to set a property on all child lines
+        local function setChildProperty(prop, value)
+            for _, line in pairs(lines) do
+                line[prop] = value
+            end
+        end
+        
+        local proxy = {}
+        drawings[objId] = proxy
+        
+        return setmetatable(proxy, {
+            __newindex = function(_, index, value)
+                if quadObj[index] == nil then return end
+                
+                quadObj[index] = value
+                
+                if index:match("^Point") then
+                    updateQuad()
+                elseif index == "Filled" then
+                    -- TODO: Implement a filled quad. A simple solution using basic UI elements
+                    -- is not possible for an arbitrary quad. It would require more advanced
+                    -- rendering techniques or a custom mesh. For now, the quad can only be an outline.
+                    setChildProperty("Visible", not value)
+                    if value then
+                        warn("Filled Quads are not supported by this implementation.")
+                    end
+                else
+                    setChildProperty(index, value)
+                end
+            end,
+            __index = function(self, index)
+                if index == "Remove" or index == "Destroy" then
+                    return function()
+                        for _, line in pairs(lines) do
+                            line:Remove()
+                        end
+                        drawings[objId] = nil
+                    end
+                end
+                return quadObj[index]
+            end
+        })
+        
+    elseif drawingType == "Triangle" then
+        local triangleObj = {
+            PointA = Vector2.zero,
+            PointB = Vector2.zero,
+            PointC = Vector2.zero,
+            Thickness = 1,
+            Filled = false
+        }
+        
+        setmetatable(triangleObj, {__index = baseDrawingObj})
+        
+        local lines = {
+            A = Drawing.new("Line"),
+            B = Drawing.new("Line"),
+            C = Drawing.new("Line")
+        }
+        
+        local function updateTriangle()
+            -- Only update if not filled
+            if not triangleObj.Filled then
+                lines.A.From = triangleObj.PointA
+                lines.A.To = triangleObj.PointB
+                lines.B.From = triangleObj.PointB
+                lines.B.To = triangleObj.PointC
+                lines.C.From = triangleObj.PointC
+                lines.C.To = triangleObj.PointA
+            end
+        end
+        
+        -- This function is called to set a property on all child lines
+        local function setChildProperty(prop, value)
+            for _, line in pairs(lines) do
+                line[prop] = value
+            end
+        end
+        
+        local proxy = {}
+        drawings[objId] = proxy
+        
+        return setmetatable(proxy, {
+            __newindex = function(_, index, value)
+                if triangleObj[index] == nil then return end
+                
+                triangleObj[index] = value
+                
+                if index:match("^Point") then
+                    updateTriangle()
+                elseif index == "Filled" then
+                    -- TODO: Implement filling.
+                    setChildProperty("Visible", not value)
+                    if value then
+                        warn("Filled Triangles are not supported by this implementation.")
+                    end
+                else
+                    setChildProperty(index, value)
+                end
+            end,
+            __index = function(self, index)
+                if index == "Remove" or index == "Destroy" then
+                    return function()
+                        for _, line in pairs(lines) do
+                            line:Remove()
+                        end
+                        drawings[objId] = nil
+                    end
+                end
+                return triangleObj[index]
+            end
+        })
+    else
+        error("Unsupported drawing type: "..tostring(drawingType))
+    end
+end)
+
+-- Expose to global environment
+getgenv().Drawing = Drawing
+getgenv().drawing = Drawing
+getgenv().cleardrawcache = cleardrawcache
+getgenv().isrenderobj = isrenderobj
+getgenv().getrenderproperty = getrenderproperty
+getgenv().setrenderproperty = setrenderproperty
